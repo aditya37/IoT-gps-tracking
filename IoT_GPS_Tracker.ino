@@ -1,46 +1,43 @@
-#include <LiquidCrystal_I2C.h>
-#include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
+#include <PubSubClient.h>
+
+// custom header
+#include "WLANManager.h"
+#include "LCDBoilerplate.h"
+#include "PUBSUBManager.h"
 
 // PIN
 #define LED_WARNING_PIN 2
-
-// Consturct
-LiquidCrystal_I2C lcd(0x27, 16, 2);
-ESP8266WebServer httpServer(80);
-
+#define SDAPIN 2 // D2
+#define SCLPIN 16 // D1
 
 // Constant
-const char *wlanSSID = "Terrace Cafe 2";
-const char *wlanPassword = "susujahe";
+String DEVICE_ID = "iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
+const char* NOTIFY_TOPIC = "/device/notify/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
+const char* HEARTBEAT_TOPIC = "/device/heartbeat/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
+const char *mqtt_broker = "192.168.1.16";
+const char *mqtt_username = "";
+const char *mqtt_password = "";
+int mqtt_port = 1883;
+int HEARTBEAT_DURATION = 5000;
+const char *wlanSSID = "KEDAI DJENGGOT $$$";
+const char *wlanPassword = "tulislangsung";
+
+//INSTANCE
+ESP8266WebServer httpServer(80);
+LCDBoilerplate lb(0x27, SDAPIN, SCLPIN);
+WLANManager wl(lb);
+PUBSUBManager pb(mqtt_broker, mqtt_username, mqtt_password, mqtt_port);
 
 String htmlStrListNetwork = "";
 // <li> Tag html
 String htmlliTagNetwork = "";
 
-// TODO: Lcd Boilerplate
-void writeConnectionStateWlan(String text) {
-  lcd.setCursor(2, 0);
-  lcd.print(text);
-}
-void writeFailedToConnectWlan() {
-  lcd.clear();
-  lcd.setCursor(1, 0);
-  lcd.print("Failed to");
-  lcd.setCursor(1, 1);
-  lcd.print("connect wlan");
-  delay(2000);
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Please open WLAN");
-  lcd.setCursor(0, 1);
-  lcd.print("Config Page");
-}
 
 /*
-   EEPROM Manager
+   EEPROM Manager (Memory)
 */
 String getLastWlanPassword() {
   String strPassword = "";
@@ -56,46 +53,6 @@ void clearEEPROM(int eepromRange) {
     EEPROM.write(i, 0);
   }
   EEPROM.commit();
-}
-/*
-   Wlan manager
-*/
-
-// TODO: Create header for wifi manager
-bool wlanConnected() {
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-  return true;
-}
-void changeWlanModeToAccessPoint() {
-  // Set mode to accessPoint
-  WiFi.mode(WIFI_STA);
-  // disconnect if connected with another wlan
-  WiFi.disconnect();
-  // break before scan a network
-  delay(1000);
-
-  // count available nearby network
-  int countNearbyNet = WiFi.scanNetworks();
-  Serial.print(countNearbyNet);
-  Serial.print(" Nearby network");
-  Serial.println("");
-
-  // validate count nearby network
-  if (countNearbyNet == 0) {
-    Serial.println("Nearby network Not found");
-  } else {
-
-    // show detail network
-    for (int net = 0; net < countNearbyNet; net++) {
-      htmlliTagNetwork += "<li>" + WiFi.SSID(net) + "</li>";
-    }
-    Serial.println(htmlStrListNetwork);
-  }
-  // set SSID name
-  // for connect to nodemcu and config wlan
-  WiFi.softAP("IoT-Tracker-WLAN", "");
 }
 
 /*
@@ -129,7 +86,7 @@ void connectToWlanHandler() {
 
   // clean last eeprom/wlan
   clearEEPROM(96);
-  
+
   String back = "<a href='/network/nearby'>Back</a>";
   httpServer.send(200, "text/html", back);
 }
@@ -145,49 +102,40 @@ void webServerController() {
 
 
 void setup() {
-  // Init a lcd
-  lcd.begin(16, 2);
-  lcd.init();
-  lcd.backlight();
+
   // Init serial
   Serial.begin(9600);
-  // Init LED
-  pinMode(LED_WARNING_PIN, OUTPUT);
-  // connect to last connected wifi
-  WiFi.begin(wlanSSID, wlanPassword);
+  //  TODO: remove
   httpServer.begin();
 
-  // loop 5 times
-  for (int count = 0; count <= 15; count++) {
-    // blink led until connected wifi or failed to connect wifi
-    digitalWrite(LED_WARNING_PIN, HIGH);
+  // Init LED
+  pinMode(LED_WARNING_PIN, OUTPUT);
 
-    if (!wlanConnected()) {
-      lcd.clear();
-      lcd.setCursor(1, 1);
-      lcd.print("Connecting.....");
-      // if count > 9 will break and not connected to wifi
-      if (count >= 5 ) {
-        // lcd
-        writeFailedToConnectWlan();
-        // change mode to ap and serve http
-        changeWlanModeToAccessPoint();
-        // serve http
-        webServerController();
-        return;
-      }
-    } else {
-      lcd.clear();
-      digitalWrite(LED_WARNING_PIN, HIGH);
-      writeConnectionStateWlan("Connected....");
-      return;
-    }
-    digitalWrite(LED_WARNING_PIN, LOW);
-    delay(1000);
+  // connect to last connected wifi
+  wl.ConnectToWlan(wlanSSID, wlanPassword);
+
+  // wlan connection ticker
+  bool tickWlanConn = wl.WlanConnectionTicker(40, 20);
+  if (!tickWlanConn) {
+    wl.AccessPointMode("IoT-Tracking-Device");
+  } else {
+    bool isConnectedBroker = pb.ConnectingToBroker(DEVICE_ID);
+    if (!isConnectedBroker) {
+      // write to lcd if not connected
+      lb.WriteMQTTState(false);
+    };
+    // write to lcd if connected to broker
+    lb.WriteMQTTState(true);
+    // Message callback
+    pb.MessageCallback();
+    // publish notify
+    //pb.Publish(NOTIFY_TOPIC, "tes");
   }
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
   httpServer.handleClient();
+  pb.Loop();
+  pb.Heartbeat(HEARTBEAT_DURATION, HEARTBEAT_TOPIC, DEVICE_ID);
 }
