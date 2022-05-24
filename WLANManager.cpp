@@ -1,10 +1,16 @@
 #include "WLANManager.h"
 #include "LCDBoilerplate.h"
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+WiFiUDP ntpUDP;
+//NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
 // Constructor
-WLANManager::WLANManager(LCDBoilerplate lb): lb(lcd_Addr, lcd_cols, lcd_rows) {
+WLANManager::WLANManager(LCDBoilerplate lb): lb(lcd_Addr, lcd_cols, lcd_rows), ntpUDP(), timeClient(ntpUDP, _poolServerName, NTP_OFFSET) {
   this->lb = lb;
+  this-> _poolServerName = "id.pool.ntp.org";
+  this-> NTP_OFFSET =  7 * 60 * 60; // gmt +7
+  this->ntpUDP = ntpUDP;
 }
 
 // getwlanStatus
@@ -66,4 +72,32 @@ void WLANManager::AccessPointMode(String wlanName) {
     }
   }
   WiFi.softAP(wlanName, "");
+}
+
+//GetWlanSignalStrength
+int32_t WLANManager::GetWlanSignalStrength() {
+  return WiFi.RSSI();
+}
+
+//GetMacAddress....
+String WLANManager::GetMacAddress() {
+  return WiFi.softAPmacAddress().c_str();
+}
+
+// ==============================
+// NTP
+// ==============================
+void WLANManager::NTPBegin() {
+  timeClient.setPoolServerName(_poolServerName);
+  timeClient.begin();
+}
+
+// UpdateNTP....
+void WLANManager::UpdateNTP() {
+  timeClient.update();
+}
+
+unsigned long WLANManager::GetEpochTime() {
+  unsigned long epochTime = timeClient.getEpochTime();
+  return epochTime;
 }

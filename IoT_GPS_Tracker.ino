@@ -1,118 +1,94 @@
-#include <ESP8266HTTPClient.h>
-#include <ESP8266WebServer.h>
-#include <EEPROM.h>
-#include <PubSubClient.h>
-
+#include <ArduinoJson.h>
 // custom header
 #include "WLANManager.h"
 #include "LCDBoilerplate.h"
 #include "PUBSUBManager.h"
 
 // PIN
-#define LED_WARNING_PIN 2
+#define LED_WARNING_PIN 0
 #define SDAPIN 2 // D2
 #define SCLPIN 16 // D1
 
 // Constant
 String DEVICE_ID = "iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
+
+/* NOTIFY TOPIC, for notif server or backend
+    if device have some event or incident
+*/
 const char* NOTIFY_TOPIC = "/device/notify/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
 const char* HEARTBEAT_TOPIC = "/device/heartbeat/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
-const char *mqtt_broker = "192.168.1.16";
-const char *mqtt_username = "";
-const char *mqtt_password = "";
+const char* REQUEST_REGISTER_DEVICE_TOPIC = "/device/req/register/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
+
+const char *mqtt_broker = "adityarahman.com";
+const char *mqtt_username = "vps-mqtt";
+const char *mqtt_password = "lymousin";
 int mqtt_port = 1883;
-int HEARTBEAT_DURATION = 5000;
+int HEARTBEAT_DURATION = 10000;
 const char *wlanSSID = "KEDAI DJENGGOT $$$";
-const char *wlanPassword = "tulislangsung";
+const char *wlanPassword = "estebuireng";
+
+//Heart beat data
+char HeartbeatMessage[1024];
+int heartbeat_last_milis = 0;
+int minimumSignalRange = -86;
+
 
 //INSTANCE
-ESP8266WebServer httpServer(80);
 LCDBoilerplate lb(0x27, SDAPIN, SCLPIN);
 WLANManager wl(lb);
-PUBSUBManager pb(mqtt_broker, mqtt_username, mqtt_password, mqtt_port);
+PUBSUBManager pb(mqtt_broker, mqtt_username, mqtt_password, mqtt_port,wl,lb);
 
-String htmlStrListNetwork = "";
-// <li> Tag html
-String htmlliTagNetwork = "";
-
-
-/*
-   EEPROM Manager (Memory)
-*/
-String getLastWlanPassword() {
-  String strPassword = "";
-  return strPassword;
+//MessageCallback....
+void _callback(char *topic, byte *payload, unsigned int length) {
+  Serial.println(topic);
 }
-String getLastWlanSSID() {
-  String strSSID = "";
-  return strSSID;
-}
-void clearEEPROM(int eepromRange) {
-  for ( int i = 0; i < eepromRange; ++i) {
-    // do clear
-    EEPROM.write(i, 0);
+
+void Heartbeat(int duration, const char* topic, String deviceid) {
+  unsigned long current_milis = millis();
+  if (current_milis - heartbeat_last_milis >= duration) {
+    heartbeat_last_milis = current_milis;
+    // create json
+    StaticJsonDocument<1024> doc;
+    // check wlan strength
+    if (wl.GetWlanSignalStrength() < minimumSignalRange && wl.GetWlanSignalStrength() < -100) {
+      Serial.println(wl.GetWlanSignalStrength());
+      Serial.println("Sinyal rendah");
+      doc["device_id"] = deviceid;
+      doc["status"] = "LOW SIGNAL";
+      doc["description"] = "Device connected with low signal";
+      doc["timestamp"] =  wl.GetEpochTime();;
+      serializeJson(doc, HeartbeatMessage);
+      bool isPublished = pb.Publish(topic, HeartbeatMessage);
+      if (!isPublished) {
+        Serial.println("Device is off");
+        return;
+      }
+    } else {
+      Serial.println("================================");
+      Serial.println(wl.GetWlanSignalStrength());
+      Serial.println("Healty Device");
+      doc["device_id"] = deviceid;
+      doc["status"] = "HEALTHY";
+      doc["description"] = "Device is healthy";
+      doc["timestamp"] = wl.GetEpochTime();
+      serializeJson(doc, HeartbeatMessage);
+      bool isPublished = pb.Publish(topic, HeartbeatMessage);
+      if (!isPublished) {
+        Serial.println("Device is off");
+        return;
+      }
+    }
   }
-  EEPROM.commit();
 }
-
-/*
-  Http Template
-*/
-String htmlNearbyWlanList() {
-  htmlStrListNetwork += "";
-  htmlStrListNetwork += "<b> Nearby Wlan: </b>";
-  htmlStrListNetwork += "<ul>";
-  htmlStrListNetwork += htmlliTagNetwork;
-  htmlStrListNetwork += "</ul>";
-  htmlStrListNetwork += "<form action='/network/connect' >";
-  htmlStrListNetwork += "SSID:<br> <input type='text' name='ssid'>";
-  htmlStrListNetwork += "<br></br>";
-  htmlStrListNetwork += "Password:<br> <input type='text' name='password'>";
-  htmlStrListNetwork += "<br></br>";
-  htmlStrListNetwork += "<br> <input type='submit'>";
-  htmlStrListNetwork += "</form>";
-  return htmlStrListNetwork;
-}
-
-/*
-   Web Manager
-*/
-void healthCheckHandler() {
-  httpServer.send(200, "text/html", "<b>UP</b>");
-}
-void connectToWlanHandler() {
-  String ssid = httpServer.arg("ssid");
-  String password = httpServer.arg("password");
-
-  // clean last eeprom/wlan
-  clearEEPROM(96);
-
-  String back = "<a href='/network/nearby'>Back</a>";
-  httpServer.send(200, "text/html", back);
-}
-void pageNearbyNetworkHandler() {
-  String strHtml  = htmlNearbyWlanList();
-  httpServer.send(200, "text/html", htmlStrListNetwork);
-}
-void webServerController() {
-  httpServer.on("/", healthCheckHandler);
-  httpServer.on("/network/nearby", pageNearbyNetworkHandler);
-  httpServer.on("/network/connect", connectToWlanHandler);
-}
-
 
 void setup() {
 
   // Init serial
   Serial.begin(9600);
-  //  TODO: remove
-  httpServer.begin();
-
-  // Init LED
-  pinMode(LED_WARNING_PIN, OUTPUT);
 
   // connect to last connected wifi
   wl.ConnectToWlan(wlanSSID, wlanPassword);
+  wl.NTPBegin();
 
   // wlan connection ticker
   bool tickWlanConn = wl.WlanConnectionTicker(40, 20);
@@ -127,15 +103,18 @@ void setup() {
     // write to lcd if connected to broker
     lb.WriteMQTTState(true);
     // Message callback
-    pb.MessageCallback();
-    // publish notify
-    //pb.Publish(NOTIFY_TOPIC, "tes");
+    pb.MessageCallback(_callback);
+    wl.UpdateNTP();
+    
+    pb.RequestRegisterDevice(REQUEST_REGISTER_DEVICE_TOPIC, DEVICE_ID,wl.GetEpochTime());
+    delay(1000);
+    pb.Subscribe(REQUEST_REGISTER_DEVICE_TOPIC,0);
   }
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
-  httpServer.handleClient();
   pb.Loop();
-  pb.Heartbeat(HEARTBEAT_DURATION, HEARTBEAT_TOPIC, DEVICE_ID);
+  wl.UpdateNTP();
+  Heartbeat(HEARTBEAT_DURATION, HEARTBEAT_TOPIC, DEVICE_ID);
 }
