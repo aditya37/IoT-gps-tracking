@@ -19,7 +19,7 @@ const char* NOTIFY_TOPIC = "/device/notify/iot.1bf7a743-d86a-4709-9832-3f522d4cf
 const char* HEARTBEAT_TOPIC = "/device/heartbeat/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
 const char* REQUEST_REGISTER_DEVICE_TOPIC = "/device/req/register/iot.1bf7a743-d86a-4709-9832-3f522d4cf645";
 
-const char *mqtt_broker = "adityarahman.com";
+const char *mqtt_broker = "";
 const char *mqtt_username = "vps-mqtt";
 const char *mqtt_password = "lymousin";
 int mqtt_port = 1883;
